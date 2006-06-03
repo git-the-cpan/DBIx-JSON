@@ -18,14 +18,17 @@ sub check_mysql {
     eval {
         my $obj = DBIx::JSON->new( $dsn, "mysql", $dbusername, $dbpasswd );
         $obj->do_select("select * from user;")->get_json;
-        $obj->do_select("select * from user;", "user")->get_json;
+        $obj->do_select( "select * from user;", "User" )->get_json;
+        $obj->do_select( "select * from user;", "User", 1 )->get_json;
     };
     return !$@;
 }
 
 sub check_pg {
+    1;
 }
 
 sub check_csv {
+    1;
 }
 

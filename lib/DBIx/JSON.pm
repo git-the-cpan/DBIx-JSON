@@ -2,15 +2,51 @@ package DBIx::JSON;
 
 use warnings;
 use strict;
-use vars qw(@ISA @EXPORT @EXPORT_OK);
-require Exporter;
 
-our $VERSION = '0.01';
-@ISA       = qw(Exporter);
-@EXPORT    = qw();
-@EXPORT_OK = qw();
+=head1 NAME
+
+DBIx::JSON - Perl extension for creating JSON from existing DBI datasources
+
+=head1 DESCRIPTION
+
+This module is perl extension for creating JSON from existing DBI datasources.
+
+One use of this module might be to extract data on the web
+server, and send the raw data (in JSON format) to a client's
+browser, and then JavaScript do eval it to generate dynamic HTML.
+
+This module was inspired by DBIx::XML_RDB.
+
+=head1 VERSION
+
+Version 0.02
+
+=cut
+
+our $VERSION = '0.02';
+
+=head1 SYNOPSIS
+
+    my $dsn = "dbname=$dbname;host=$host;port=$port";
+    print DBIx::JSON->new( $dsn, "mysql", $dbusername, $dbpasswd )
+        ->do_select("select * from table;")->get_json;
+
+    or
+
+    my $dsn = "dbname=$dbname;host=$host;port=$port";
+    my $obj = DBIx::JSON->new($dsn, "mysql", $dbusername, $dbpasswd);
+    $obj->do_select("select * from table;", "colmun1", 1);
+    $obj->err && die $obj->errstr;
+    print $obj->get_json;
+
+=head1 EXPORT
+
+None.
+
+=cut
 
 use DBI 1.15 ();
+use Carp ();
 use JSON::Syck;
 
 sub new {
@@ -28,22 +64,44 @@ sub _init {
     my $userid = shift;
     my $passwd = shift;
 
-    $self->{dbh} = DBI->connect( "dbi:$driver:$dsn", $userid, $passwd );
+    eval {
+        $self->{dbh} =
+          DBI->connect( "dbi:$driver:$dsn", $userid, $passwd,
+            { PrintWarm => 0, PrintError => 1 } );
+      }
+      or $@ && Carp::croak $@;
     if ( !$self->{dbh} ) {
         return ();
+    }
+    else {
+        $self->{dbh}->{PrintError} = 0;
     }
     1;
 }
 
 sub do_select {
-    my $self      = shift;
-    my $sql       = shift;
-    my $key_field = shift;
+    my $self       = shift;
+    my $sql        = shift;
+    my $key_field  = shift;
+    my $hash_array = shift;
     if ($key_field) {
-        $self->{data} = $self->{dbh}->selectall_hashref( $sql, $key_field );
+        eval {
+            $self->{data} = $self->{dbh}->selectall_hashref( $sql, $key_field );
+          }
+          or $@ && Carp::croak $@;
+        if ( $self->{dbh}->err ) {
+            Carp::carp $self->{dbh}->errstr;
+        }
+        if ($hash_array) {
+            $self->{data} = [ values( %{ $self->{data} } ) ];
+        }
     }
     else {
-        $self->{data} = $self->{dbh}->selectall_arrayref($sql);
+        eval { $self->{data} = $self->{dbh}->selectall_arrayref($sql); }
+          or $@ && Carp::croak $@;
+        if ( $self->{dbh}->err ) {
+            Carp::carp $self->{dbh}->errstr;
+        }
     }
     return $self;
 }
@@ -51,7 +109,11 @@ sub do_select {
 sub do_sql {
     my $self = shift;
     my $sql  = shift;
-    $self->{dbh}->do($sql);
+    eval { $self->{dbh}->do($sql); }
+      or $@ && Carp::croak $@;
+    if ( $self->{dbh}->err ) {
+        Carp::carp $self->{dbh}->errstr;
+    }
     return $self;
 }
 
@@ -79,60 +141,39 @@ sub clear_data {
 
 sub errstr {
     my $self = shift;
-    return $self->{dbh}->errstr;
+    if ( $self->{dbh} ) {
+        return $self->{dbh}->errstr;
+    }
+    else {
+        return ();
+    }
 }
 
 sub err {
     my $self = shift;
-    return $self->{dbh}->err;
+    if ( $self->{dbh} ) {
+        return $self->{dbh}->err;
+    }
+    else {
+        return ();
+    }
 }
 
 sub DESTROY {
     my $self = shift;
-    $self->{dbh}->disconnect;
+    if ( $self->{dbh} ) {
+        $self->{dbh}->disconnect;
+    }
+    else {
+        return ();
+    }
 }
 
-1; # End of DBIx::JSON
+1;    # End of DBIx::JSON
 
 __END__
 
-=head1 NAME
-
-DBIx::JSON - Perl extension for creating JSON from existing DBI datasources
-
-=head1 VERSION
-
-Version 0.01
-
-=head1 SYNOPSIS
-
-    my $dsn = "dbname=$dbname;host=$host;port=$port";
-    print DBIx::JSON->new( $dsn, "mysql", $dbusername, $dbpasswd )
-        ->do_select("select * from table;")->get_json;
-
-    or
-
-    my $dsn = "dbname=$dbname;host=$host;port=$port";
-    my $obj = DBIx::JSON->new($dsn, "mysql", $dbusername, $dbpasswd);
-    $obj->do_select("select * from table;");
-    $obj->err && die $obj->errstr;
-    print $obj->get_json;
-
-=head1 EXPORT
-
-none. This is OO.
-
-=head1 DESCRIPTION
-
-This module is a simple creator of JSON data from RDBMS.
-
-One use of this module might be to extract data on the web
-server, and send the raw data (in JSON format) to a client's
-browser, and then JavaScript do eval it to generate dynamic HTML.
-
-This module was inspired by DBIx::XML_RDB.
-
-=head1 FUNCTIONS
+=head1 METHODS
 
 =head2 new
 
@@ -143,11 +184,11 @@ See the DBI documentation for what each of these means.
 
 =head2 do_select
 
-    $obj->do_select( $sql [, $key_field] );
+    $obj->do_select( $sql [, $key_field [, $hash_array] ] );
 
 This takes a SELECT command string, and calls DBI::selectall_arrayref
 method. If $key_field is given, this calls DBI::selectall_hashref method.
-See the DBI documentation for details.
+See the DBI documentation for details. $hash_array affects get_json method.
 
 This doesn't do any checking if the sql is valid. Subsequent calls
 to do_select do overwrite the output.
@@ -166,21 +207,29 @@ and calls DBI::do method. See the DBI documentation for details.
 Simply returns the JSON generated from the previous SQL call.
 The format of the JSON output is something like this:
 
-    # selectall_arrayref
+    # default
     [
-        ["user1","data1"],
-        ["user2","data2"],
-        ["user3","data3"],
+        ["user1", "data1"],
+        ["user2", "data2"],
+        ["user3", "data3"],
         ...
     ]
 
-    # selectall_hashref
+    # if do_select was called with $key_field
     {
-        "user1":{"data":"data1","name":"user1"},
-        "user2":{"data":"data2","name":"user2"},
-        "user3":{"data":"data3","name":"user3"},
+        "user1":{"data":"data1", "name":"user1"},
+        "user2":{"data":"data2", "name":"user2"},
+        "user3":{"data":"data3", "name":"user3"},
         ...
     }
+
+    # if do_select was called with $hash_array
+    [
+        {"data":"data1", "name":"user1"},
+        {"data":"data2", "name":"user2"},
+        {"data":"data3", "name":"user3"},
+        ...
+    ]
 
 =head2 has_data
 
@@ -196,19 +245,20 @@ This clears the results from the previous SQL call.
 
 =head2 err
 
-    $obj->err();
+    $obj->err;
 
 This returns $DBI::err.
 
 =head2 errstr
 
-    $obj->errstr();
+    $obj->errstr;
 
 This returns $DBI::errstr.
 
 =head1 AUTHOR
 
-Koji Komatsu, C<< <yosty at kmtz.net> >>
+JSON::Syck by Tatsuhiko Miyagawa, C<< <miyagawa@bulknews.net> >>
+Tweaked by Koji Komatsu, C<< <yosty@cpan.org> >>
 
 =head1 BUGS
 
